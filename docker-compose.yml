@@ -1,0 +1,208 @@
+# ============================================================
+# 一键启动：MySQL + Redis + Milvus(etcd/minio) + App + Celery Worker + Nginx
+# 使用：
+#   1) cp .env.example .env 并按需修改（密钥、密码一律走 .env，不硬编码）
+#   2) mkdir -p models && 把 bge-m3 / bge-reranker-v2-m3 放进 ./models
+#   3) docker compose up -d --build
+#   4) docker compose exec app python scripts/init_db.py
+#      docker compose exec app python scripts/seed_data.py
+# ============================================================
+name: finance-qa
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: finance-qa-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?请在 .env 中设置 MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-finance_qa}
+      MYSQL_USER: ${MYSQL_USER:-finance}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?请在 .env 中设置 MYSQL_PASSWORD}
+      TZ: Asia/Shanghai
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_general_ci
+      - --default-time-zone=+08:00
+    volumes:
+      - mysql_data:/var/lib/mysql
+    ports:
+      - "${MYSQL_PORT:-3306}:3306"
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u$$MYSQL_USER -p$$MYSQL_PASSWORD --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks: [finance-net]
+
+  redis:
+    image: redis:7-alpine
+    container_name: finance-qa-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?请在 .env 中设置 REDIS_PASSWORD}"]
+    volumes:
+      - redis_data:/data
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a $$REDIS_PASSWORD ping | grep PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    networks: [finance-net]
+
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.14
+    container_name: finance-qa-etcd
+    restart: unless-stopped
+    environment:
+      ETCD_AUTO_COMPACTION_MODE: revision
+      ETCD_AUTO_COMPACTION_RETENTION: "1000"
+      ETCD_QUOTA_BACKEND_BYTES: "4294967296"
+      ETCD_SNAPSHOT_COUNT: "50000"
+    command: ["etcd", "-advertise-client-urls=http://127.0.0.1:2379", "-listen-client-urls=http://0.0.0.0:2379", "--data-dir", "/etcd"]
+    volumes:
+      - etcd_data:/etcd
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 30s
+      timeout: 20s
+      retries: 5
+    networks: [finance-net]
+
+  minio:
+    image: minio/minio:RELEASE.2024-05-28T17-19-04Z
+    container_name: finance-qa-minio
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: ${MINIO_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_PASSWORD:?请在 .env 中设置 MINIO_PASSWORD}
+    command: ["minio", "server", "/minio_data", "--console-address", ":9001"]
+    volumes:
+      - minio_data:/minio_data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 5
+    networks: [finance-net]
+
+  milvus:
+    image: milvusdb/milvus:v2.4.13
+    container_name: finance-qa-milvus
+    restart: unless-stopped
+    command: ["milvus", "run", "standalone"]
+    security_opt:
+      - seccomp:unconfined
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio:9000
+    volumes:
+      - milvus_data:/var/lib/milvus
+    ports:
+      - "${MILVUS_PORT:-19530}:19530"
+      - "${MILVUS_WEB_PORT:-9091}:9091"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      interval: 30s
+      timeout: 20s
+      retries: 5
+      start_period: 90s
+    depends_on:
+      etcd:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    networks: [finance-net]
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: finance-qa-app:latest
+    container_name: finance-qa-app
+    restart: unless-stopped
+    env_file: [.env]
+    environment:
+      DATABASE_URL: mysql+aiomysql://${MYSQL_USER:-finance}:${MYSQL_PASSWORD}@mysql:3306/${MYSQL_DATABASE:-finance_qa}?charset=utf8mb4
+      SYNC_DATABASE_URL: mysql+pymysql://${MYSQL_USER:-finance}:${MYSQL_PASSWORD}@mysql:3306/${MYSQL_DATABASE:-finance_qa}?charset=utf8mb4
+      MILVUS_HOST: milvus
+      MILVUS_PORT: "19530"
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@redis:6379/1
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@redis:6379/2
+      EMBEDDING_MODEL_PATH: /models/bge-m3
+      RERANKER_MODEL_PATH: /models/bge-reranker-v2-m3
+      UPLOAD_DIR: /app/uploads
+    volumes:
+      - ./models:/models:ro
+      - uploads_data:/app/uploads
+      - ./logs:/app/logs
+    ports:
+      - "${APP_PORT:-8000}:8000"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      milvus:
+        condition: service_healthy
+    networks: [finance-net]
+
+  worker:
+    image: finance-qa-app:latest
+    container_name: finance-qa-worker
+    restart: unless-stopped
+    env_file: [.env]
+    environment:
+      DATABASE_URL: mysql+aiomysql://${MYSQL_USER:-finance}:${MYSQL_PASSWORD}@mysql:3306/${MYSQL_DATABASE:-finance_qa}?charset=utf8mb4
+      SYNC_DATABASE_URL: mysql+pymysql://${MYSQL_USER:-finance}:${MYSQL_PASSWORD}@mysql:3306/${MYSQL_DATABASE:-finance_qa}?charset=utf8mb4
+      MILVUS_HOST: milvus
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@redis:6379/1
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@redis:6379/2
+      EMBEDDING_MODEL_PATH: /models/bge-m3
+      RERANKER_MODEL_PATH: /models/bge-reranker-v2-m3
+      UPLOAD_DIR: /app/uploads
+    command: ["celery", "-A", "app.tasks.celery_app:celery_app", "worker", "-Q", "finance_qa", "-l", "info", "-c", "2"]
+    volumes:
+      - ./models:/models:ro
+      - uploads_data:/app/uploads
+      - ./logs:/app/logs
+    depends_on:
+      app:
+        condition: service_started
+      redis:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+    networks: [finance-net]
+
+  nginx:
+    build:
+      context: .
+      dockerfile: web/Dockerfile
+    image: finance-qa-web:latest
+    container_name: finance-qa-nginx
+    restart: unless-stopped
+    ports:
+      - "${NGINX_PORT:-80}:80"
+    depends_on:
+      app:
+        condition: service_started
+    networks: [finance-net]
+
+volumes:
+  mysql_data:
+  redis_data:
+  etcd_data:
+  minio_data:
+  milvus_data:
+  uploads_data:
+
+networks:
+  finance-net:
+    driver: bridge

@@ -1,0 +1,132 @@
+# ============================================================
+# 精简部署编排（2C / 4GB ECS 专用）
+# ------------------------------------------------------------
+# 与原 docker-compose.yml 的全部差异：
+#   1. 删除 etcd / minio / milvus 三个容器 -> 改用 Milvus Lite（嵌入式，单文件）
+#   2. 删除 celery worker 容器      -> 改用 INLINE_INGEST=true 在 API 进程内入库
+#   3. app 只起 1 个 uvicorn worker -> 避免加载两份 bge-m3（省约 2.9GB）
+#   4. MySQL 收缩 buffer pool、关闭 performance_schema（省约 200MB）
+#   5. Redis 关闭 RDB/AOF 持久化并设 maxmemory
+#
+# 内存预算（实测目标）：
+#   app(bge-m3 单进程) ~2.9G | mysql ~0.30G | redis ~0.03G | nginx ~0.02G
+#   系统 + dockerd ~0.4G  =>  合计约 3.6G / 4G，另加 4G swap 兜底
+#
+# 启动：
+#   docker compose -f docker-compose.lite.yml up -d --build
+# ============================================================
+name: finance-qa
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: finance-qa-redis
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --requirepass
+      - ${REDIS_PASSWORD:?请在 .env 中设置 REDIS_PASSWORD}
+      - --maxmemory
+      - 160mb
+      - --maxmemory-policy
+      - allkeys-lru
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      TZ: Asia/Shanghai
+    volumes:
+      - redis_data:/data
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    mem_limit: 220m
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a $$REDIS_PASSWORD ping | grep PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [finance-net]
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # 镜像源可在 .env 中覆盖；阿里云 ECS 建议指向内网 mirrors.cloud.aliyuncs.com
+        APT_MIRROR: ${APT_MIRROR:-mirrors.aliyun.com}
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}
+        TORCH_WHEEL_URL: ${TORCH_WHEEL_URL:-}
+    image: finance-qa-app:latest
+    container_name: finance-qa-app
+    restart: unless-stopped
+    env_file: [.env]
+    environment:
+      # ---- 数据库：SQLite（省掉 MySQL 容器约 300MB，且无需拉取 600MB 镜像）----
+      # 项目 models 已为 sqlite 准备了 BigInteger 变体，init_db.py 也识别 sqlite 前缀；
+      # app 为单 uvicorn worker，写入并发压力小，SQLite 足够。
+      DATABASE_URL: sqlite+aiosqlite:////app/sqlite_data/finance.db
+      SYNC_DATABASE_URL: sqlite:////app/sqlite_data/finance.db
+      # ---- 用 Milvus Lite 取代 milvus/etcd/minio 三容器 ----
+      MILVUS_LITE_PATH: /app/milvus_data/finance.db
+      # 注意：不要给 MILVUS_PORT 传空串——它是 int 字段，空串会导致 pydantic 校验失败
+      MILVUS_TIMEOUT: "30"
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@redis:6379/1
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@redis:6379/2
+      EMBEDDING_MODEL_PATH: /models/bge-m3
+      RERANKER_MODEL_PATH: /models/bge-reranker-v2-m3
+      UPLOAD_DIR: /app/uploads
+      # ---- 低配关键开关 ----
+      INLINE_INGEST: "true"        # 无 worker，入库在 API 进程内异步跑
+      UVICORN_WORKERS: "1"         # 只加载一份 bge-m3
+      EMBEDDING_BATCH_SIZE: "4"    # 降低编码峰值内存
+      OMP_NUM_THREADS: "2"         # 限制 torch 线程数，避免线程 arena 膨胀
+      MKL_NUM_THREADS: "2"
+      OPENBLAS_NUM_THREADS: "2"
+      TOKENIZERS_PARALLELISM: "false"
+      MALLOC_ARENA_MAX: "2"        # glibc 多 arena 是 RSS 虚高的常见来源
+      # ---- 检索策略：hybrid 不触发 reranker 加载 ----
+      DEFAULT_STRATEGY: hybrid
+    volumes:
+      - ./models:/models:ro
+      # 代码以宿主机为准挂载：改代码后只需 restart app，无需重建 2GB 镜像
+      - ./app:/app/app
+      - ./scripts:/app/scripts
+      - uploads_data:/app/uploads
+      - milvus_lite_data:/app/milvus_data
+      - sqlite_data:/app/sqlite_data
+      - ./logs:/app/logs
+    ports:
+      - "${APP_PORT:-8000}:8000"
+    # 不设 mem_limit：让 bge-m3 的峰值由 swap 兜底，避免容器被直接 OOM kill
+    mem_reservation: 2200m
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks: [finance-net]
+
+  nginx:
+    build:
+      context: .
+      dockerfile: web/Dockerfile
+    image: finance-qa-web:latest
+    container_name: finance-qa-nginx
+    restart: unless-stopped
+    ports:
+      - "${NGINX_PORT:-80}:80"
+    mem_limit: 128m
+    depends_on:
+      app:
+        condition: service_started
+    networks: [finance-net]
+
+volumes:
+  redis_data:
+  milvus_lite_data:
+  sqlite_data:
+  uploads_data:
+
+networks:
+  finance-net:

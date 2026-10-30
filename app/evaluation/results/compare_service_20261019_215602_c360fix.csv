@@ -1,0 +1,5 @@
+﻿config,strategy,faithfulness,answer_relevancy,context_precision,context_recall,avg_latency_ms,samples,reranker
+A_纯向量检索,vector,0.6811,0.2702,0.7267,0.9695,1807.6,60,none
+B_纯BM25检索,bm25,0.674,0.2736,0.655,0.9453,3674.8,60,none
+C_混合检索(RRF),hybrid,0.6801,0.2711,0.72,0.9657,3759.2,60,none
+D_混合检索+重排(本系统),hybrid_rerank,0.6813,0.2701,0.7433,0.9685,6194.2,60,bge-reranker

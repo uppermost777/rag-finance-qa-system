@@ -1,0 +1,5 @@
+﻿config,strategy,faithfulness,answer_relevancy,context_precision,context_recall,avg_latency_ms,samples,reranker
+A_纯向量检索,vector,0.4003,0.1993,0.0625,0.5578,1759.0,60,none
+B_纯BM25检索,bm25,0.2995,0.188,0.0917,0.5166,3295.2,60,none
+C_混合检索(RRF),hybrid,0.4004,0.1988,0.0625,0.5578,3711.6,60,none
+D_混合检索+重排(本系统),hybrid_rerank,0.402,0.1984,0.0625,0.5578,3706.8,60,lexical-proxy

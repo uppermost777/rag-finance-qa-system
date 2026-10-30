@@ -1,0 +1,2 @@
+﻿config,strategy,faithfulness,answer_relevancy,context_precision,context_recall,avg_latency_ms,samples,reranker
+A_纯向量检索,vector,0.5769,0.3446,0.25,1.0,4380.0,2,none

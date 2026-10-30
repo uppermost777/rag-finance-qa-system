@@ -1,0 +1,41 @@
+# 环境与密钥
+.env
+.env.local
+*.key
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+venv/
+.venv/
+env/
+
+# 运行期数据
+logs/
+uploads/
+work_logs/
+*.log
+
+# 模型权重（体积大，运行时挂载 /models 卷）
+models/
+
+# 评估中间产物（保留 CSV 与图，忽略临时文件）
+app/evaluation/results/*.tmp
+app/evaluation/results/*.jsonl
+
+# 前端
+web/node_modules/
+web/dist/
+web/.vite/
+web/*.local
+
+# 其他
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+celerybeat-schedule*

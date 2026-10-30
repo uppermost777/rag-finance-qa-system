@@ -1,0 +1,89 @@
+:root {
+  --app-bg: #f5f7fb;
+  --app-primary: #2f6fed;
+  --app-text: #1f2937;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--app-bg);
+  color: var(--app-text);
+  font-family: 'Helvetica Neue', 'PingFang SC', 'Microsoft YaHei', Arial, sans-serif;
+}
+
+.page {
+  padding: 18px 22px 32px;
+}
+
+.page-title {
+  margin: 0 0 14px;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.disclaimer {
+  margin-top: 12px;
+  padding: 10px 14px;
+  border-left: 3px solid #e6a23c;
+  background: #fff9ec;
+  color: #8a6d3b;
+  font-size: 12px;
+  line-height: 1.7;
+  border-radius: 4px;
+}
+
+.markdown-body {
+  line-height: 1.75;
+  word-break: break-word;
+}
+
+.markdown-body code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: #f2f3f5;
+  font-family: Consolas, 'Courier New', monospace;
+}
+
+.markdown-body pre {
+  padding: 12px;
+  border-radius: 6px;
+  background: #282c34;
+  color: #e6e6e6;
+  overflow: auto;
+}
+
+.citation-list {
+  margin-top: 8px;
+  font-size: 13px;
+}
+
+.citation-item {
+  padding: 6px 0;
+  border-bottom: 1px dashed #dcdfe6;
+}
+
+.citation-item:last-child {
+  border-bottom: none;
+}
+
+.citation-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #606266;
+}
+
+.citation-snippet {
+  margin-top: 4px;
+  color: #909399;
+}
