@@ -38,7 +38,28 @@
 - `app/evaluation/results/compare_offline_20261014_112359_full60.png`（四组配置指标柱状图）
 - `app/evaluation/results/compare_service_20261019_220621_c360all.csv`（360 卡片 / 60 样本明细）
 
-> 界面截图可在本地运行 `web/` 后自行截取，放入 `docs/screenshots/` 并替换本节说明。
+### 界面预览
+
+> 以下截图取自实际运行的演示环境（2 核 4GB 云服务器 + `docker-compose.lite.yml`，
+> 库内 6 个知识库 / 360 篇文档 / 360 条切片），非设计稿。
+
+**对话主界面**：一次完整问答——检索 → 生成 → `[1][2]` 引用编号 → 可展开的原文来源
+（文件名 + 页码 + 片段 + 相似度），底部固定风险提示。该次请求端到端 2.4s。
+
+![对话主界面](docs/screenshots/02-chat.png)
+
+**风险测评**：10 题问卷提交后即时计算五维得分（理财知识 / 风险态度 / 流动性需求 /
+风险承受 / 投资经验），输出 C1–C5 风险等级与推荐学习路径。
+
+![风险测评](docs/screenshots/03-risk.png)
+
+**知识库管理（管理员）**：按知识库分组管理文档，展示入库状态 `done`、切片数与重建索引入口。
+
+![知识库管理](docs/screenshots/04-kb-admin.png)
+
+**登录页**：JWT 登录，内置学生 / 管理员演示账号一键填充。
+
+![登录页](docs/screenshots/01-login.png)
 
 ## 三、系统架构
 
