@@ -70,6 +70,26 @@ flowchart LR
     W --> M
 ```
 
+### 轻量部署模式（2 核 4GB 可运行）
+
+完整设计含 8 个服务，实测需约 8GB 内存。为在低配云服务器上交付演示环境，仓库额外提供
+`docker-compose.lite.yml`，把组件压缩至 **3 个容器**（redis / app / nginx），实测常驻内存
+**1.6GB**、稳态问答延迟 **2.1s**：
+
+| 原组件 | 精简方案 | 收益 |
+|---|---|---|
+| Milvus 2.4 + etcd + MinIO | **Milvus Lite**（`MILVUS_LITE_PATH`，单文件嵌入式） | 少 3 个容器，省约 1.8GB |
+| MySQL 8.0 | **SQLite**（`sqlite+aiosqlite`） | 少 1 个容器；模型层已有 `with_variant(Integer, "sqlite")`，业务代码零改动 |
+| Celery Worker | **`INLINE_INGEST=true`** | 入库在 API 进程内异步执行，省一份嵌入模型 |
+| `uvicorn --workers 2` | **`UVICORN_WORKERS=1`** | 双 worker 会加载两份 bge-m3，是原设计最隐蔽的内存开销 |
+
+```bash
+docker compose -f docker-compose.lite.yml up -d --build
+```
+
+> Milvus Lite 为单进程独占数据库文件：批量入库须先停掉 app，再以独立容器执行
+> `docker compose -f docker-compose.lite.yml run --rm --no-deps app python scripts/ingest_corpus.py --cards data/corpus/cards.jsonl`。
+
 详细设计（含 8 张表字段表、Milvus Collection 设计、Redis Key 规范、REST 契约、设计决策）见
 [DESIGN.md](DESIGN.md)。
 
@@ -200,6 +220,26 @@ alembic revision --autogenerate -m "描述"
 ```
 
 结果落盘到 `app/evaluation/results/`：汇总 CSV、逐样本 CSV、柱状图 PNG，文件名带时间戳不覆盖历史。
+
+### 检索策略对比结果
+
+60 条评测集 × 360 张知识卡片语料，`--mode service` 真实链路（Milvus + bge-m3 + bge-reranker + LLM）：
+
+| 配置 | 忠实度 | 答案相关性 | 上下文精确率 | 上下文召回率 | 平均延迟 |
+|---|---|---|---|---|---|
+| A 纯向量检索 | 0.6810 | 0.2733 | 0.7167 | 0.9715 | 1.86 s |
+| B 纯 BM25 检索 | 0.6651 | 0.2631 | 0.6450 | 0.9477 | 1.63 s |
+| C 混合检索（RRF） | 0.6803 | 0.2774 | 0.7100 | 0.9706 | 1.80 s |
+| **D 混合检索 + 重排（本系统）** | **0.6855** | 0.2706 | **0.7267** | 0.9705 | 4.60 s |
+
+![检索策略对比实验](app/evaluation/results/compare_service_20261019_220621_c360all.png)
+
+**结论与取舍**：重排把上下文精确率从 0.7100 提升到 0.7267（+1.67 个百分点），但同时把平均延迟
+从 1.8s 拉到 4.6s。因此在 4GB 演示环境默认使用 `hybrid`（稳态 2.1s），`hybrid_rerank`
+保留给论文实验与离线批量评估——提升幅度有限是实测结论，不做夸大表述。
+
+> `answer_relevancy` 为未安装 `ragas` 时的确定性代理指标实现，绝对值偏低属口径差异，
+> 仅用于四组配置之间的相对比较。
 
 **关于指标口径（务必阅读）**：
 
